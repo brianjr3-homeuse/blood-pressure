@@ -154,7 +154,6 @@
       <div class="btn-group">
         <button class="btn-success" onclick="exportCSV(false)">匯出個人 CSV</button>
         <button class="btn-secondary" onclick="exportCSV(true)">匯出本機全體</button>
-        <button class="btn-outline" onclick="fetchCloudData()">手動同步</button>
       </div>
     </div>
   </div>
@@ -231,7 +230,7 @@
       if (!users || !Array.isArray(users) || users.length === 0) {
         let initialName = prompt('歡迎使用！請輸入這台手機的預設使用者姓名：', '');
         while (!initialName || !initialName.trim()) {
-          initialName = prompt('姓名不得為空，請輸入姓名（例如：展宗 或 盈甄）：', '');
+          initialName = prompt('姓名不得為空，請輸入姓名', '');
         }
         users = [initialName.trim()];
         localStorage.setItem(`users_${deviceToken}`, JSON.stringify(users));
