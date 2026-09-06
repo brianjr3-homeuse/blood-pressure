@@ -2,7 +2,6 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
-  <!-- 必須保留：讓手機瀏覽器能依照實體像素縮放，電腦版不受影響 -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>血壓健康管理追蹤器</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -18,9 +17,6 @@
 
     * { box-sizing: border-box; }
 
-    /* ========================================================
-       1. 預設桌面網頁版樣式（完全保留原始橫向排版與尺寸）
-       ======================================================== */
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       max-width: 950px;
@@ -91,54 +87,31 @@
     .legend-item { display: inline-flex; align-items: center; gap: 4px; }
     .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 
-    /* ========================================================
-       2. 手機版樣式（僅在螢幕寬度 <= 768px 時生效）
-       ======================================================== */
+    /* 手機螢幕優化 */
     @media (max-width: 768px) {
-      body {
-        margin: 0.5rem auto;
-        padding: 0 0.5rem;
-      }
-      .card {
-        padding: 1rem;
-        margin-bottom: 0.75rem;
-      }
+      body { margin: 0.5rem auto; padding: 0 0.5rem; }
+      .card { padding: 1rem; margin-bottom: 0.75rem; }
       .form-group-desktop-split {
         flex-direction: column !important;
         align-items: stretch !important;
         gap: 12px !important;
       }
-      .form-group {
-        flex-direction: column;
-        align-items: stretch;
-      }
+      .form-group { flex-direction: column; align-items: stretch; }
       .btn-group {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 8px;
         width: 100%;
       }
-      .btn-group button:last-child {
-        grid-column: span 2;
-      }
+      .btn-group button:last-child { grid-column: span 2; }
       input, select, button {
         width: 100% !important;
-        font-size: 16px; /* 防止 iOS 點擊輸入框時畫面放大 */
+        font-size: 16px;
         min-height: 42px;
       }
-      .chart-header {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 8px;
-      }
-      .chart-wrapper {
-        height: 260px;
-      }
-      .del-btn {
-        min-height: 30px !important;
-        padding: 2px 8px !important;
-        font-size: 12px !important;
-      }
+      .chart-header { flex-direction: column; align-items: stretch; gap: 8px; }
+      .chart-wrapper { height: 260px; }
+      .del-btn { min-height: 30px !important; padding: 2px 8px !important; font-size: 12px !important; }
     }
   </style>
 </head>
@@ -146,7 +119,7 @@
 
   <h2>🩺 展宗 & 盈甄 血壓健康追蹤管理</h2>
 
-  <!-- 成員選擇 & 備份功能區 -->
+  <!-- 成員選擇、新增與刪除區 -->
   <div class="card">
     <div class="form-group form-group-desktop-split" style="justify-content: space-between;">
       <div class="form-group" style="flex-direction: row; flex-wrap: wrap;">
@@ -157,7 +130,8 @@
           <input type="text" id="newUserName" placeholder="新成員姓名" style="width: 110px;">
           <button onclick="addUser()" style="width: 70px;">+ 新增</button>
         </div>
-        <button class="btn-danger" style="padding: 6px 10px; font-size: 12px;" onclick="clearCurrentUserRecords()">清空此人紀錄</button>
+        <button class="btn-danger" style="padding: 6px 10px; font-size: 12px;" onclick="deleteCurrentUser()">刪除此成員</button>
+        <button class="btn-outline" style="padding: 6px 10px; font-size: 12px;" onclick="clearCurrentUserRecords()">清空此人紀錄</button>
       </div>
       <div class="btn-group">
         <button class="btn-success" onclick="exportCSV(false)">匯出當前成員 CSV</button>
@@ -230,14 +204,12 @@
     function getData() {
       let data = JSON.parse(localStorage.getItem('bp_app_data'));
 
-      if (!data || typeof data !== 'object') {
+      if (!data || typeof data !== 'object' || Object.keys(data).length === 0) {
         data = { "展宗": [], "盈甄": [] };
       } else {
         let changed = false;
         if ('爸爸' in data) { delete data['爸爸']; changed = true; }
         if ('媽媽' in data) { delete data['媽媽']; changed = true; }
-        if (!Array.isArray(data['展宗'])) { data['展宗'] = []; changed = true; }
-        if (!Array.isArray(data['盈甄'])) { data['盈甄'] = []; changed = true; }
 
         Object.keys(data).forEach(user => {
           const uniqueRecords = [];
@@ -277,23 +249,23 @@
       }
     }
 
-    function initUsers() {
+    function initUsers(preferredUser = null) {
       const data = getData();
       const select = document.getElementById('userSelect');
-      const currentUser = select.value;
+      const users = Object.keys(data);
       select.innerHTML = '';
 
-      Object.keys(data).forEach(user => {
+      users.forEach(user => {
         const opt = document.createElement('option');
         opt.value = user;
         opt.textContent = user;
         select.appendChild(opt);
       });
 
-      if (currentUser && data[currentUser]) {
-        select.value = currentUser;
-      } else {
-        select.value = '展宗';
+      if (preferredUser && data[preferredUser]) {
+        select.value = preferredUser;
+      } else if (users.length > 0) {
+        select.value = users[0];
       }
       render();
     }
@@ -305,13 +277,38 @@
       if (!data[name]) {
         data[name] = [];
         saveData(data);
-        initUsers();
-        document.getElementById('userSelect').value = name;
-        render();
+        initUsers(name);
       } else {
         alert('該成員已存在！');
       }
       document.getElementById('newUserName').value = '';
+    }
+
+    // 刪除目前選取的成員功能
+    function deleteCurrentUser() {
+      const user = document.getElementById('userSelect').value;
+      const data = getData();
+      const userList = Object.keys(data);
+
+      if (userList.length <= 1) {
+        alert('至少需要保留一位成員，無法全部刪除！');
+        return;
+      }
+
+      const count = (data[user] || []).length;
+      const confirmMsg = count > 0 
+        ? `確定要刪除成員【${user}】嗎？\n該成員名下的 ${count} 筆血壓紀錄將會一併被永久刪除！` 
+        : `確定要刪除成員【${user}】嗎？`;
+
+      if (!confirm(confirmMsg)) return;
+
+      delete data[user];
+      saveData(data);
+
+      // 自動切換到剩餘的第一位成員
+      const remainingUsers = Object.keys(data);
+      initUsers(remainingUsers[0]);
+      alert(`已成功刪除成員【${user}】。`);
     }
 
     function switchUser() {
@@ -579,8 +576,9 @@
       link.click();
       setTimeout(() => document.body.removeChild(link), 300);
     }
+
     setNowDateTime();
-    initUsers();
+    initUsers('展宗');
   </script>
 </body>
 </html>
