@@ -138,6 +138,7 @@
     <span id="syncStatus" class="status-badge">載入中...</span>
   </div>
 
+  <!-- 成員切換與管理區 -->
   <div class="card">
     <div class="form-group form-group-desktop-split" style="justify-content: space-between;">
       <div class="form-group" style="flex-direction: row; flex-wrap: wrap;">
@@ -145,7 +146,7 @@
           <select id="userSelect" onchange="switchUser()"></select>
         </label>
         <div style="display: flex; gap: 6px;">
-          <input type="text" id="newUserName" placeholder="新增成員" style="width: 110px;">
+          <input type="text" id="newUserName" placeholder="新增長輩/小孩" style="width: 120px;">
           <button onclick="addUser()" style="width: 70px;">+ 新增</button>
         </div>
         <button class="btn-danger" style="padding: 6px 10px; font-size: 12px;" onclick="deleteCurrentUser()">刪除此成員</button>
@@ -157,6 +158,7 @@
     </div>
   </div>
 
+  <!-- 輸入資料區 -->
   <div class="card">
     <div class="form-group">
       <label>測量時間：<input type="datetime-local" id="recordDateTime"></label>
@@ -174,6 +176,7 @@
     </div>
   </div>
 
+  <!-- 趨勢圖表區 -->
   <div class="card">
     <div class="chart-header">
       <h3 style="margin:0;" id="chartTitle">血壓趨勢</h3>
@@ -184,6 +187,7 @@
     </div>
   </div>
 
+  <!-- 歷史紀錄表格 -->
   <div class="card">
     <h3 style="margin-top:0;">測量歷史紀錄</h3>
     <div class="table-responsive">
@@ -204,12 +208,15 @@
   </div>
 
   <script>
-    // 請填入你的 Google Apps Script 部署網址
-    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwpBddfV6NELN56jvuhQ-rNTIh6BThg56oX8tqYl_cy8oHC0UTF-gZcRlIH5x9vsqE/exec";
+    // =======================================================
+    // 請將你的 Google Apps Script 部署網址貼在下方引號中：
+    // =======================================================
+    const GOOGLE_SCRIPT_URL = "在此貼上你的_GOOGLE_APPS_SCRIPT_網址";
 
     let chartInstance = null;
     let deviceToken = '';
 
+    // 初始化裝置指紋與使用者清單
     function initDevice() {
       deviceToken = localStorage.getItem('app_device_token');
       if (!deviceToken) {
@@ -338,7 +345,7 @@
       return { label: '正常血壓', class: 'badge-normal' };
     }
 
-    // 將任何時間字串轉為分鐘精確度（YYYY-MM-DD HH:mm），徹底解決比對落差
+    // 將任何日期格式標準化為 YYYY-MM-DD HH:mm，徹底消除重整比對差異
     function normalizeTimeKey(dateStr) {
       const d = new Date(dateStr);
       if (isNaN(d.getTime())) return String(dateStr);
@@ -354,79 +361,74 @@
       return normalizeTimeKey(isoStr);
     }
 
-    // 雲端同步核心修正：使用標準化特徵鍵進行去重比對
-  // 替換 index.html 中的 fetchCloudData
-function fetchCloudData() {
-  if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes("在此貼上")) {
-    updateSyncStatus("未設定網址", "status-error");
-    return;
-  }
+    // 採用 JSONP 機制穿透 Google Apps Script 轉址，避開 CORS 問題
+    function fetchCloudData() {
+      if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes("https://script.google.com/macros/s/AKfycbwpBddfV6NELN56jvuhQ-rNTIh6BThg56oX8tqYl_cy8oHC0UTF-gZcRlIH5x9vsqE/exec")) {
+        updateSyncStatus("未設定雲端網址", "status-error");
+        return;
+      }
 
-  const activeUser = document.getElementById('userSelect').value;
-  const queryToken = `${deviceToken}_${activeUser}`;
+      const activeUser = document.getElementById('userSelect').value;
+      const queryToken = `${deviceToken}_${activeUser}`;
 
-  updateSyncStatus("雲端同步中...", "status-syncing");
+      updateSyncStatus("雲端同步中...", "status-syncing");
 
-  // 定義回呼函式名稱
-  const callbackName = 'handleCloudData_' + Math.floor(Math.random() * 1000000);
+      const callbackName = 'handleCloudData_' + Math.floor(Math.random() * 1000000);
 
-  // 設定超時防呆（5 秒若無回應標示離線）
-  const timeoutId = setTimeout(() => {
-    cleanup();
-    updateSyncStatus("離線模式 (本機可用)", "status-error");
-  }, 5000);
+      const timeoutId = setTimeout(() => {
+        cleanup();
+        updateSyncStatus("離線模式 (本機可用)", "status-error");
+      }, 6000);
 
-  function cleanup() {
-    clearTimeout(timeoutId);
-    if (window[callbackName]) delete window[callbackName];
-    const scriptEl = document.getElementById(callbackName);
-    if (scriptEl) scriptEl.remove();
-  }
+      function cleanup() {
+        clearTimeout(timeoutId);
+        if (window[callbackName]) delete window[callbackName];
+        const scriptEl = document.getElementById(callbackName);
+        if (scriptEl) scriptEl.remove();
+      }
 
-  // 接收 Google Apps Script 回傳的資料
-  window[callbackName] = function(cloudData) {
-    cleanup();
-    if (Array.isArray(cloudData)) {
-      const localData = getActiveRecords();
-      const combined = [...localData];
+      window[callbackName] = function(cloudData) {
+        cleanup();
+        if (Array.isArray(cloudData)) {
+          const localData = getActiveRecords();
+          const combined = [...localData];
 
-      cloudData.forEach(c => {
-        const cloudKey = `${normalizeTimeKey(c.datetime)}_${c.sys}_${c.dia}`;
-        const exists = combined.some(l => {
-          const localKey = `${normalizeTimeKey(l.datetime)}_${l.sys}_${l.dia}`;
-          return localKey === cloudKey;
-        });
-        if (!exists) combined.push(c);
-      });
+          cloudData.forEach(c => {
+            const cloudKey = `${normalizeTimeKey(c.datetime)}_${c.sys}_${c.dia}`;
+            const exists = combined.some(l => {
+              const localKey = `${normalizeTimeKey(l.datetime)}_${l.sys}_${l.dia}`;
+              return localKey === cloudKey;
+            });
+            if (!exists) combined.push(c);
+          });
 
-      const finalRecords = [];
-      const seen = new Set();
-      combined.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+          const finalRecords = [];
+          const seen = new Set();
+          combined.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
 
-      combined.forEach(r => {
-        const uKey = `${normalizeTimeKey(r.datetime)}_${r.sys}_${r.dia}`;
-        if (!seen.has(uKey)) {
-          seen.add(uKey);
-          finalRecords.push(r);
+          combined.forEach(r => {
+            const uKey = `${normalizeTimeKey(r.datetime)}_${r.sys}_${r.dia}`;
+            if (!seen.has(uKey)) {
+              seen.add(uKey);
+              finalRecords.push(r);
+            }
+          });
+
+          saveActiveRecords(finalRecords);
+          render();
+          updateSyncStatus("已與雲端同步", "status-online");
         }
-      });
+      };
 
-      saveActiveRecords(finalRecords);
-      render();
-      updateSyncStatus("已與雲端同步", "status-online");
+      const script = document.createElement('script');
+      script.id = callbackName;
+      script.src = `${GOOGLE_SCRIPT_URL}?token=${encodeURIComponent(queryToken)}&callback=${callbackName}`;
+      script.onerror = () => {
+        cleanup();
+        updateSyncStatus("離線模式 (本機可用)", "status-error");
+      };
+      document.body.appendChild(script);
     }
-  };
-
-  // 動態建立 script 標籤載入資料（完全規避 CORS）
-  const script = document.createElement('script');
-  script.id = callbackName;
-  script.src = `${GOOGLE_SCRIPT_URL}?token=${encodeURIComponent(queryToken)}&callback=${callbackName}`;
-  script.onerror = () => {
-    cleanup();
-    updateSyncStatus("離線模式 (本機可用)", "status-error");
-  };
-  document.body.appendChild(script);
-}
 
     async function saveRecord() {
       const activeUser = document.getElementById('userSelect').value;
@@ -462,10 +464,10 @@ function fetchCloudData() {
             body: JSON.stringify({
               token: `${deviceToken}_${activeUser}`,
               name: activeUser,
-              datetime,
-              sys,
-              dia,
-              pulse
+              datetime: datetime,
+              sys: sys,
+              dia: dia,
+              pulse: pulse
             })
           });
           updateSyncStatus("已備份至雲端", "status-online");
@@ -627,7 +629,7 @@ function fetchCloudData() {
       setTimeout(() => document.body.removeChild(link), 300);
     }
 
-    // 啟動初始化流程
+    // 啟動流程
     initDevice();
     setNowDateTime();
     fetchCloudData();
