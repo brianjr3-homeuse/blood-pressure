@@ -32,7 +32,24 @@
       margin-bottom: 1.25rem;
       box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
-    h2 { margin: 0 0 0.5rem 0; color: #111827; }
+    .header-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+    h2 { margin: 0; color: #111827; }
+    .status-badge {
+      font-size: 13px;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      background: #e5e7eb;
+      color: #4b5563;
+    }
+    .status-syncing { background: #fef3c7; color: #b45309; }
+    .status-online { background: #dcfce7; color: #15803d; }
+    .status-error { background: #fee2e2; color: #b91c1c; }
+
     .form-group { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
     .btn-group { display: flex; flex-wrap: wrap; gap: 8px; }
 
@@ -87,7 +104,6 @@
     .legend-item { display: inline-flex; align-items: center; gap: 4px; }
     .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 
-    /* 手機螢幕優化 */
     @media (max-width: 768px) {
       body { margin: 0.5rem auto; padding: 0 0.5rem; }
       .card { padding: 1rem; margin-bottom: 0.75rem; }
@@ -117,27 +133,28 @@
 </head>
 <body>
 
-  <h2>🩺血壓健康追蹤管理</h2>
+  <div class="header-bar">
+    <h2 id="mainTitle">🩺 血壓健康管理</h2>
+    <span id="syncStatus" class="status-badge">載入中...</span>
+  </div>
 
-  <!-- 成員選擇、新增與刪除區 -->
+  <!-- 成員切換與新增功能區 -->
   <div class="card">
     <div class="form-group form-group-desktop-split" style="justify-content: space-between;">
       <div class="form-group" style="flex-direction: row; flex-wrap: wrap;">
-        <label><strong>當前對象：</strong>
+        <label><strong>記錄對象：</strong>
           <select id="userSelect" onchange="switchUser()"></select>
         </label>
         <div style="display: flex; gap: 6px;">
-          <input type="text" id="newUserName" placeholder="新成員姓名" style="width: 110px;">
+          <input type="text" id="newUserName" placeholder="新增長輩/小孩" style="width: 120px;">
           <button onclick="addUser()" style="width: 70px;">+ 新增</button>
         </div>
         <button class="btn-danger" style="padding: 6px 10px; font-size: 12px;" onclick="deleteCurrentUser()">刪除此成員</button>
-        <button class="btn-outline" style="padding: 6px 10px; font-size: 12px;" onclick="clearCurrentUserRecords()">清空此人紀錄</button>
       </div>
       <div class="btn-group">
-        <button class="btn-success" onclick="exportCSV(false)">匯出當前成員 CSV</button>
-        <button class="btn-secondary" onclick="exportCSV(true)">匯出全體備份</button>
-        <button class="btn-outline" onclick="document.getElementById('csvFileInput').click()">匯入 CSV</button>
-        <input type="file" id="csvFileInput" accept=".csv" style="display:none" onchange="importCSV(event)">
+        <button class="btn-success" onclick="exportCSV(false)">匯出個人 CSV</button>
+        <button class="btn-secondary" onclick="exportCSV(true)">匯出本機全體</button>
+        <button class="btn-outline" onclick="fetchCloudData()">手動同步</button>
       </div>
     </div>
   </div>
@@ -149,7 +166,7 @@
       <input type="number" id="sys" placeholder="收縮壓 (高壓)" min="30" max="260" style="width: 120px;" required>
       <input type="number" id="dia" placeholder="舒張壓 (低壓)" min="30" max="200" style="width: 120px;" required>
       <input type="number" id="pulse" placeholder="心跳 (bpm)" min="30" max="220" style="width: 100px;">
-      <button onclick="saveRecord()">儲存記錄</button>
+      <button onclick="saveRecord()">儲存記錄並同步</button>
     </div>
     <div class="legend-box">
       <span>標準參考：</span>
@@ -192,7 +209,120 @@
   </div>
 
   <script>
+    // ==========================================
+    // 請確認此處貼上你的 Google Apps Script 網址：
+    // ==========================================
+    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwpBddfV6NELN56jvuhQ-rNTIh6BThg56oX8tqYl_cy8oHC0UTF-gZcRlIH5x9vsqE/exec";
+
     let chartInstance = null;
+    let deviceToken = '';
+
+    // 初始化設備指紋與成員名冊
+    function initDevice() {
+      deviceToken = localStorage.getItem('app_device_token');
+      if (!deviceToken) {
+        deviceToken = 'dev_' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
+        localStorage.setItem('app_device_token', deviceToken);
+      }
+
+      let users = JSON.parse(localStorage.getItem(`users_${deviceToken}`));
+
+      // 首次登入詢問姓名，且設定為唯一的成員
+      if (!users || !Array.isArray(users) || users.length === 0) {
+        let initialName = prompt('歡迎使用！請輸入這台手機的預設使用者姓名：', '');
+        while (!initialName || !initialName.trim()) {
+          initialName = prompt('姓名不得為空，請輸入姓名（例如：展宗 或 盈甄）：', '');
+        }
+        users = [initialName.trim()];
+        localStorage.setItem(`users_${deviceToken}`, JSON.stringify(users));
+        // 初始化該使用者的資料庫
+        if (!localStorage.getItem(`bp_records_${deviceToken}_${users[0]}`)) {
+          localStorage.setItem(`bp_records_${deviceToken}_${users[0]}`, JSON.stringify([]));
+        }
+      }
+
+      initUserSelect();
+    }
+
+    function initUserSelect(preferredUser = null) {
+      const users = JSON.parse(localStorage.getItem(`users_${deviceToken}`)) || [];
+      const select = document.getElementById('userSelect');
+      const currentUser = preferredUser || select.value || users[0];
+      select.innerHTML = '';
+
+      users.forEach(u => {
+        const opt = document.createElement('option');
+        opt.value = u;
+        opt.textContent = u;
+        select.appendChild(opt);
+      });
+
+      if (users.includes(currentUser)) {
+        select.value = currentUser;
+      } else if (users.length > 0) {
+        select.value = users[0];
+      }
+
+      updateUserUI();
+    }
+
+    function updateUserUI() {
+      const activeUser = document.getElementById('userSelect').value;
+      document.getElementById('mainTitle').innerText = `🩺 ${activeUser} 的血壓健康管理`;
+      document.getElementById('chartTitle').innerText = `${activeUser} 的血壓趨勢`;
+      render();
+    }
+
+    function switchUser() {
+      updateUserUI();
+      fetchCloudData();
+    }
+
+    function addUser() {
+      const input = document.getElementById('newUserName');
+      const name = input.value.trim();
+      if (!name) return;
+
+      const users = JSON.parse(localStorage.getItem(`users_${deviceToken}`)) || [];
+      if (users.includes(name)) {
+        alert('該成員已存在！');
+        return;
+      }
+
+      users.push(name);
+      localStorage.setItem(`users_${deviceToken}`, JSON.stringify(users));
+      if (!localStorage.getItem(`bp_records_${deviceToken}_${name}`)) {
+        localStorage.setItem(`bp_records_${deviceToken}_${name}`, JSON.stringify([]));
+      }
+
+      input.value = '';
+      initUserSelect(name);
+    }
+
+    function deleteCurrentUser() {
+      const users = JSON.parse(localStorage.getItem(`users_${deviceToken}`)) || [];
+      const activeUser = document.getElementById('userSelect').value;
+
+      if (users.length <= 1) {
+        alert('這台手機至少要保留一位主要使用者，無法全部刪除！');
+        return;
+      }
+
+      if (!confirm(`確定要刪除成員【${activeUser}】嗎？\n該成員在本機的紀錄將會一併移除。`)) return;
+
+      const updatedUsers = users.filter(u => u !== activeUser);
+      localStorage.setItem(`users_${deviceToken}`, JSON.stringify(updatedUsers));
+      localStorage.removeItem(`bp_records_${deviceToken}_${activeUser}`);
+
+      initUserSelect(updatedUsers[0]);
+      alert(`已成功刪除成員【${activeUser}】。`);
+    }
+
+    function updateSyncStatus(text, className) {
+      const el = document.getElementById('syncStatus');
+      el.innerText = text;
+      el.className = 'status-badge ' + className;
+    }
 
     function setNowDateTime() {
       const now = new Date();
@@ -201,188 +331,126 @@
       document.getElementById('recordDateTime').value = localISOTime;
     }
 
-    function getData() {
-      let data = JSON.parse(localStorage.getItem('bp_app_data'));
-
-      if (!data || typeof data !== 'object' || Object.keys(data).length === 0) {
-        data = { "展宗": [], "盈甄": [] };
-      } else {
-        let changed = false;
-        if ('爸爸' in data) { delete data['爸爸']; changed = true; }
-        if ('媽媽' in data) { delete data['媽媽']; changed = true; }
-
-        Object.keys(data).forEach(user => {
-          const uniqueRecords = [];
-          const seen = new Set();
-          (data[user] || []).forEach(r => {
-            const key = `${r.datetime}_${r.sys}_${r.dia}_${r.pulse}`;
-            if (!seen.has(key)) {
-              seen.add(key);
-              uniqueRecords.push(r);
-            } else {
-              changed = true;
-            }
-          });
-          data[user] = uniqueRecords;
-        });
-
-        if (changed) saveData(data);
-      }
-      return data;
+    function getActiveRecords() {
+      const activeUser = document.getElementById('userSelect').value;
+      return JSON.parse(localStorage.getItem(`bp_records_${deviceToken}_${activeUser}`)) || [];
     }
 
-    function saveData(data) {
-      localStorage.setItem('bp_app_data', JSON.stringify(data));
+    function saveActiveRecords(records) {
+      const activeUser = document.getElementById('userSelect').value;
+      localStorage.setItem(`bp_records_${deviceToken}_${activeUser}`, JSON.stringify(records));
     }
 
     function evaluateBP(sys, dia) {
-      if (sys < 90 || dia < 60) {
-        return { label: '低血壓', class: 'badge-low' };
-      } else if (sys >= 140 || dia >= 90) {
-        return { label: '第二期高血壓', class: 'badge-stage2' };
-      } else if ((sys >= 130 && sys <= 139) || (dia >= 80 && dia <= 89)) {
-        return { label: '第一期高血壓', class: 'badge-stage1' };
-      } else if (sys >= 120 && sys <= 129 && dia < 80) {
-        return { label: '血壓偏高', class: 'badge-elevated' };
-      } else {
-        return { label: '正常血壓', class: 'badge-normal' };
-      }
+      if (sys < 90 || dia < 60) return { label: '低血壓', class: 'badge-low' };
+      if (sys >= 140 || dia >= 90) return { label: '第二期高血壓', class: 'badge-stage2' };
+      if ((sys >= 130 && sys <= 139) || (dia >= 80 && dia <= 89)) return { label: '第一期高血壓', class: 'badge-stage1' };
+      if (sys >= 120 && sys <= 129 && dia < 80) return { label: '血壓偏高', class: 'badge-elevated' };
+      return { label: '正常血壓', class: 'badge-normal' };
     }
 
-    function initUsers(preferredUser = null) {
-      const data = getData();
-      const select = document.getElementById('userSelect');
-      const users = Object.keys(data);
-      select.innerHTML = '';
-
-      users.forEach(user => {
-        const opt = document.createElement('option');
-        opt.value = user;
-        opt.textContent = user;
-        select.appendChild(opt);
-      });
-
-      if (preferredUser && data[preferredUser]) {
-        select.value = preferredUser;
-      } else if (users.length > 0) {
-        select.value = users[0];
-      }
-      render();
+    function formatDisplayDateTime(isoStr) {
+      return isoStr ? String(isoStr).replace('T', ' ') : '';
     }
 
-    function addUser() {
-      const name = document.getElementById('newUserName').value.trim();
-      if (!name) return;
-      const data = getData();
-      if (!data[name]) {
-        data[name] = [];
-        saveData(data);
-        initUsers(name);
-      } else {
-        alert('該成員已存在！');
-      }
-      document.getElementById('newUserName').value = '';
-    }
-
-    // 刪除目前選取的成員功能
-    function deleteCurrentUser() {
-      const user = document.getElementById('userSelect').value;
-      const data = getData();
-      const userList = Object.keys(data);
-
-      if (userList.length <= 1) {
-        alert('至少需要保留一位成員，無法全部刪除！');
+    async function fetchCloudData() {
+      if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes("在此貼上")) {
+        updateSyncStatus("離線模式", "");
         return;
       }
 
-      const count = (data[user] || []).length;
-      const confirmMsg = count > 0 
-        ? `確定要刪除成員【${user}】嗎？\n該成員名下的 ${count} 筆血壓紀錄將會一併被永久刪除！` 
-        : `確定要刪除成員【${user}】嗎？`;
+      const activeUser = document.getElementById('userSelect').value;
+      // 雲端查詢複合鍵：deviceToken + activeUser
+      const queryToken = `${deviceToken}_${activeUser}`;
 
-      if (!confirm(confirmMsg)) return;
+      updateSyncStatus("雲端同步中...", "status-syncing");
+      try {
+        const resp = await fetch(`${GOOGLE_SCRIPT_URL}?token=${encodeURIComponent(queryToken)}`);
+        const cloudData = await resp.json();
 
-      delete data[user];
-      saveData(data);
+        if (Array.isArray(cloudData)) {
+          const localData = getActiveRecords();
+          const combined = [...localData];
+          
+          cloudData.forEach(c => {
+            const exists = combined.some(l => l.datetime === c.datetime && l.sys === c.sys && l.dia === c.dia);
+            if (!exists) combined.push(c);
+          });
 
-      // 自動切換到剩餘的第一位成員
-      const remainingUsers = Object.keys(data);
-      initUsers(remainingUsers[0]);
-      alert(`已成功刪除成員【${user}】。`);
+          combined.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+          saveActiveRecords(combined);
+          render();
+          updateSyncStatus("已與雲端同步", "status-online");
+        }
+      } catch (err) {
+        updateSyncStatus("同步未連線(本機可用)", "status-error");
+      }
     }
 
-    function switchUser() {
-      render();
-    }
-
-    function clearCurrentUserRecords() {
-      const user = document.getElementById('userSelect').value;
-      if (!confirm(`確定要清空【${user}】的所有測量紀錄嗎？此動作無法復原。`)) return;
-
-      const data = getData();
-      data[user] = [];
-      saveData(data);
-      render();
-      alert(`已成功清空 ${user} 的所有紀錄。`);
-    }
-
-    function saveRecord() {
-      const user = document.getElementById('userSelect').value;
+    async function saveRecord() {
+      const activeUser = document.getElementById('userSelect').value;
       const datetime = document.getElementById('recordDateTime').value;
       const sys = Number(document.getElementById('sys').value);
       const dia = Number(document.getElementById('dia').value);
       const pulse = Number(document.getElementById('pulse').value) || null;
 
       if (!datetime || !sys || !dia) {
-        alert('請完整填寫日期時間、收縮壓與舒張壓！');
+        alert('請填寫完整的日期時間、收縮壓及舒張壓！');
         return;
       }
 
-      const data = getData();
-      if (!data[user]) data[user] = [];
-
-      const isDuplicate = data[user].some(r => r.datetime === datetime && r.sys === sys && r.dia === dia);
-      if (isDuplicate) {
-        if (!confirm('偵測到完全相同時間與數值的紀錄，確定要重複新增嗎？')) return;
-      }
-
-      data[user].push({ datetime, sys, dia, pulse });
-      data[user].sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
-      saveData(data);
+      const newRecord = { datetime, sys, dia, pulse };
+      const records = getActiveRecords();
+      records.push(newRecord);
+      records.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+      saveActiveRecords(records);
 
       document.getElementById('sys').value = '';
       document.getElementById('dia').value = '';
       document.getElementById('pulse').value = '';
       setNowDateTime();
-
       render();
+
+      if (GOOGLE_SCRIPT_URL && !GOOGLE_SCRIPT_URL.includes("在此貼上")) {
+        updateSyncStatus("備份雲端中...", "status-syncing");
+        try {
+          await fetch(GOOGLE_SCRIPT_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              token: `${deviceToken}_${activeUser}`,
+              name: activeUser,
+              datetime,
+              sys,
+              dia,
+              pulse
+            })
+          });
+          updateSyncStatus("已備份至雲端", "status-online");
+        } catch (e) {
+          updateSyncStatus("雲端未完成(已保留本機)", "status-error");
+        }
+      }
     }
 
     function deleteRecord(index) {
-      if (!confirm('確定刪除此筆記錄？')) return;
-      const user = document.getElementById('userSelect').value;
-      const data = getData();
-      data[user].splice(index, 1);
-      saveData(data);
+      if (!confirm('確定刪除此筆記錄？（本機移除）')) return;
+      const records = getActiveRecords();
+      records.splice(index, 1);
+      saveActiveRecords(records);
       render();
     }
 
-    function formatDisplayDateTime(isoStr) {
-      return isoStr ? isoStr.replace('T', ' ') : '';
-    }
-
     function render() {
-      const user = document.getElementById('userSelect').value;
-      const data = getData();
-      const records = Array.isArray(data[user]) ? [...data[user]] : [];
-
-      document.getElementById('chartTitle').innerText = `${user} 的血壓趨勢`;
+      const records = getActiveRecords();
+      const activeUser = document.getElementById('userSelect').value;
 
       const tbody = document.getElementById('tableBody');
       tbody.innerHTML = '';
 
       if (records.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="color: #9ca3af; padding: 20px;">尚無記錄，請於上方新增</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" style="color: #9ca3af; padding: 20px;">尚無記錄</td></tr>';
       } else {
         [...records].reverse().forEach((r, revIdx) => {
           const origIdx = records.length - 1 - revIdx;
@@ -479,106 +547,51 @@
       });
     }
 
-    function triggerDownload(content, filename) {
-      const encodedUri = 'data:text/csv;charset=utf-8,\uFEFF' + encodeURIComponent(content);
+    function exportCSV(allUsers = false) {
+      const activeUser = document.getElementById('userSelect').value;
+      const users = allUsers ? (JSON.parse(localStorage.getItem(`users_${deviceToken}`)) || []) : [activeUser];
+
+      let csvContent = "姓名,測量時間,收縮壓(高壓),舒張壓(低壓),心跳(脈搏),血壓狀態\r\n";
+      let rowCount = 0;
+
+      users.forEach(u => {
+        const records = JSON.parse(localStorage.getItem(`bp_records_${deviceToken}_${u}`)) || [];
+        records.forEach(r => {
+          const status = (r.sys && r.dia) ? evaluateBP(r.sys, r.dia).label : '正常';
+          csvContent += `"${u}","${formatDisplayDateTime(r.datetime)}",${r.sys},${r.dia},${r.pulse ?? ''},"${status}"\r\n`;
+          rowCount++;
+        });
+      });
+
+      if (rowCount === 0) {
+        if (!confirm('目前尚無記錄，仍要匯出空白欄位範本嗎？')) return;
+      }
+
+      const encodedUri = 'data:text/csv;charset=utf-8,\uFEFF' + encodeURIComponent(csvContent);
       const link = document.createElement('a');
       link.setAttribute('href', encodedUri);
-      link.setAttribute('download', filename);
+      link.setAttribute('download', allUsers ? '本機全體血壓記錄.csv' : `${activeUser}_血壓記錄.csv`);
       document.body.appendChild(link);
       link.click();
       setTimeout(() => document.body.removeChild(link), 300);
-    }
-
-    function exportCSV(allUsers = false) {
-      try {
-        const data = getData();
-        const usersToExport = allUsers ? Object.keys(data) : [document.getElementById('userSelect').value];
-
-        let csvContent = "姓名,測量時間,收縮壓(高壓),舒張壓(低壓),心跳(脈搏),血壓狀態\r\n";
-        let rowCount = 0;
-
-        usersToExport.forEach(u => {
-          (data[u] || []).forEach(r => {
-            const status = (r.sys && r.dia) ? evaluateBP(r.sys, r.dia).label : '正常';
-            csvContent += `"${u}","${formatDisplayDateTime(r.datetime)}",${r.sys},${r.dia},${r.pulse ?? ''},"${status}"\r\n`;
-            rowCount++;
-          });
-        });
-
-        if (rowCount === 0) {
-          if (!confirm('目前尚無記錄，仍要匯出空白欄位範本嗎？')) return;
-        }
-
-        const filename = allUsers ? '全體血壓記錄備份.csv' : `${usersToExport[0]}_血壓記錄.csv`;
-        triggerDownload(csvContent, filename);
-      } catch (err) {
-        alert('匯出失敗：' + err.message);
-      }
-    }
-
-    function importCSV(event) {
-      const file = event.target.files[0];
-      if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        try {
-          const text = e.target.result;
-          const lines = text.split(/\r\n|\n/).map(l => l.trim()).filter(l => l);
-          if (lines.length <= 1) return alert('檔案內容為空或格式不符！');
-
-          const data = getData();
-          let count = 0;
-
-          for (let i = 1; i < lines.length; i++) {
-            const cols = lines[i].split(',').map(c => c.replace(/^"|"$/g, '').trim());
-            if (cols.length >= 4) {
-              const [name, datetimeStr, sysStr, diaStr, pulseStr] = cols;
-              const sys = Number(sysStr);
-              const dia = Number(diaStr);
-              const pulse = pulseStr ? Number(pulseStr) : null;
-              const datetime = datetimeStr.replace(' ', 'T');
-
-              if (name && datetime && !isNaN(sys) && !isNaN(dia)) {
-                if (!data[name]) data[name] = [];
-                const exists = data[name].some(r => r.datetime === datetime && r.sys === sys && r.dia === dia);
-                if (!exists) {
-                  data[name].push({ datetime, sys, dia, pulse });
-                  count++;
-                }
-              }
-            }
-          }
-
-          Object.keys(data).forEach(u => {
-            data[u].sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
-          });
-
-          saveData(data);
-          initUsers();
-          alert(`匯入完成！成功載入 ${count} 筆記錄。`);
-        } catch (err) {
-          alert('解析檔案失敗，請確認檔案格式為標準 CSV。');
-        }
-        event.target.value = '';
-      };
-      reader.readAsText(file);
     }
 
     function downloadChartImage() {
       if (!chartInstance) return;
-      const user = document.getElementById('userSelect').value;
+      const activeUser = document.getElementById('userSelect').value;
       const imageURL = chartInstance.toBase64Image();
       const link = document.createElement('a');
       link.href = imageURL;
-      link.download = `${user}_血壓趨勢圖.png`;
+      link.download = `${activeUser}_血壓趨勢圖.png`;
       document.body.appendChild(link);
       link.click();
       setTimeout(() => document.body.removeChild(link), 300);
     }
 
+    // 啟動初始化流程
+    initDevice();
     setNowDateTime();
-    initUsers('展宗');
+    fetchCloudData();
   </script>
 </body>
 </html>
