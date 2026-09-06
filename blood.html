@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <!-- 必須保留：讓手機瀏覽器能依照實體像素縮放，電腦版不受影響 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>血壓健康管理追蹤器</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --normal-bg: #dcfce7; --normal-text: #166534;
+      --elevated-bg: #fef9c3; --elevated-text: #854d0e;
+      --stage1-bg: #ffedd5; --stage1-text: #9a3412;
+      --stage2-bg: #fee2e2; --stage2-text: #991b1b;
+      --low-bg: #e0f2fe; --low-text: #075985;
+    }
+
+    * { box-sizing: border-box; }
+
+    /* ========================================================
+       1. 預設桌面網頁版樣式（完全保留原始橫向排版與尺寸）
+       ======================================================== */
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      max-width: 950px;
+      margin: 1.5rem auto;
+      padding: 0 1rem;
+      color: #1f2937;
+      background: #f3f4f6;
+    }
+    .card {
+      background: #fff;
+      padding: 1.25rem 1.5rem;
+      border-radius: 12px;
+      margin-bottom: 1.25rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    h2 { margin: 0 0 0.5rem 0; color: #111827; }
+    .form-group { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .btn-group { display: flex; flex-wrap: wrap; gap: 8px; }
+
+    input, select, button {
+      padding: 8px 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(37,99,235,0.2);
+    }
+    button {
+      background: var(--primary);
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-weight: 500;
+      transition: background 0.15s ease;
+    }
+    button:hover { opacity: 0.9; }
+    .btn-secondary { background: #4b5563; }
+    .btn-success { background: #16a34a; }
+    .btn-danger { background: #dc2626; }
+    .btn-outline { background: transparent; color: #374151; border: 1px solid #d1d5db; }
+    .btn-outline:hover { background: #f9fafb; }
+    
+    .table-responsive { width: 100%; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { border: 1px solid #e5e7eb; padding: 9px; text-align: center; font-size: 13.5px; white-space: nowrap; }
+    th { background: #f9fafb; font-weight: 600; }
+    tr:nth-child(even) { background: #fafafa; }
+    
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .badge-normal { background: var(--normal-bg); color: var(--normal-text); }
+    .badge-elevated { background: var(--elevated-bg); color: var(--elevated-text); }
+    .badge-stage1 { background: var(--stage1-bg); color: var(--stage1-text); }
+    .badge-stage2 { background: var(--stage2-bg); color: var(--stage2-text); }
+    .badge-low { background: var(--low-bg); color: var(--low-text); }
+
+    .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+    .chart-wrapper { position: relative; width: 100%; height: 350px; }
+    .legend-box { font-size: 12px; color: #6b7280; display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 4px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+    /* ========================================================
+       2. 手機版樣式（僅在螢幕寬度 <= 768px 時生效）
+       ======================================================== */
+    @media (max-width: 768px) {
+      body {
+        margin: 0.5rem auto;
+        padding: 0 0.5rem;
+      }
+      .card {
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+      }
+      .form-group-desktop-split {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 12px !important;
+      }
+      .form-group {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .btn-group {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        width: 100%;
+      }
+      .btn-group button:last-child {
+        grid-column: span 2;
+      }
+      input, select, button {
+        width: 100% !important;
+        font-size: 16px; /* 防止 iOS 點擊輸入框時畫面放大 */
+        min-height: 42px;
+      }
+      .chart-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+      }
+      .chart-wrapper {
+        height: 260px;
+      }
+      .del-btn {
+        min-height: 30px !important;
+        padding: 2px 8px !important;
+        font-size: 12px !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <h2>🩺 展宗 & 盈甄 血壓健康追蹤管理</h2>
+
+  <!-- 成員選擇 & 備份功能區 -->
+  <div class="card">
+    <div class="form-group form-group-desktop-split" style="justify-content: space-between;">
+      <div class="form-group" style="flex-direction: row; flex-wrap: wrap;">
+        <label><strong>當前對象：</strong>
+          <select id="userSelect" onchange="switchUser()"></select>
+        </label>
+        <div style="display: flex; gap: 6px;">
+          <input type="text" id="newUserName" placeholder="新成員姓名" style="width: 110px;">
+          <button onclick="addUser()" style="width: 70px;">+ 新增</button>
+        </div>
+        <button class="btn-danger" style="padding: 6px 10px; font-size: 12px;" onclick="clearCurrentUserRecords()">清空此人紀錄</button>
+      </div>
+      <div class="btn-group">
+        <button class="btn-success" onclick="exportCSV(false)">匯出當前成員 CSV</button>
+        <button class="btn-secondary" onclick="exportCSV(true)">匯出全體備份</button>
+        <button class="btn-outline" onclick="document.getElementById('csvFileInput').click()">匯入 CSV</button>
+        <input type="file" id="csvFileInput" accept=".csv" style="display:none" onchange="importCSV(event)">
+      </div>
+    </div>
+  </div>
+
+  <!-- 輸入資料區 -->
+  <div class="card">
+    <div class="form-group">
+      <label>測量時間：<input type="datetime-local" id="recordDateTime"></label>
+      <input type="number" id="sys" placeholder="收縮壓 (高壓)" min="30" max="260" style="width: 120px;" required>
+      <input type="number" id="dia" placeholder="舒張壓 (低壓)" min="30" max="200" style="width: 120px;" required>
+      <input type="number" id="pulse" placeholder="心跳 (bpm)" min="30" max="220" style="width: 100px;">
+      <button onclick="saveRecord()">儲存記錄</button>
+    </div>
+    <div class="legend-box">
+      <span>標準參考：</span>
+      <span class="legend-item"><span class="dot" style="background:#166534"></span>正常 (&lt;120 且 &lt;80)</span>
+      <span class="legend-item"><span class="dot" style="background:#854d0e"></span>偏高 (120-129 且 &lt;80)</span>
+      <span class="legend-item"><span class="dot" style="background:#9a3412"></span>第一期高血壓 (130-139 或 80-89)</span>
+      <span class="legend-item"><span class="dot" style="background:#991b1b"></span>第二期高血壓 (≥140 或 ≥90)</span>
+    </div>
+  </div>
+
+  <!-- 趨勢圖表區 -->
+  <div class="card">
+    <div class="chart-header">
+      <h3 style="margin:0;" id="chartTitle">血壓趨勢</h3>
+      <button class="btn-outline" onclick="downloadChartImage()">下載圖表 PNG</button>
+    </div>
+    <div class="chart-wrapper">
+      <canvas id="bpChart"></canvas>
+    </div>
+  </div>
+
+  <!-- 歷史紀錄表格 -->
+  <div class="card">
+    <h3 style="margin-top:0;">測量歷史紀錄</h3>
+    <div class="table-responsive">
+      <table>
+        <thead>
+          <tr>
+            <th>時間</th>
+            <th>收縮壓 (高壓)</th>
+            <th>舒張壓 (低壓)</th>
+            <th>心跳 (bpm)</th>
+            <th>狀態評估</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    let chartInstance = null;
+
+    function setNowDateTime() {
+      const now = new Date();
+      const offset = now.getTimezoneOffset() * 60000;
+      const localISOTime = (new Date(now - offset)).toISOString().slice(0, 16);
+      document.getElementById('recordDateTime').value = localISOTime;
+    }
+
+    function getData() {
+      let data = JSON.parse(localStorage.getItem('bp_app_data'));
+
+      if (!data || typeof data !== 'object') {
+        data = { "展宗": [], "盈甄": [] };
+      } else {
+        let changed = false;
+        if ('爸爸' in data) { delete data['爸爸']; changed = true; }
+        if ('媽媽' in data) { delete data['媽媽']; changed = true; }
+        if (!Array.isArray(data['展宗'])) { data['展宗'] = []; changed = true; }
+        if (!Array.isArray(data['盈甄'])) { data['盈甄'] = []; changed = true; }
+
+        Object.keys(data).forEach(user => {
+          const uniqueRecords = [];
+          const seen = new Set();
+          (data[user] || []).forEach(r => {
+            const key = `${r.datetime}_${r.sys}_${r.dia}_${r.pulse}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              uniqueRecords.push(r);
+            } else {
+              changed = true;
+            }
+          });
+          data[user] = uniqueRecords;
+        });
+
+        if (changed) saveData(data);
+      }
+      return data;
+    }
+
+    function saveData(data) {
+      localStorage.setItem('bp_app_data', JSON.stringify(data));
+    }
+
+    function evaluateBP(sys, dia) {
+      if (sys < 90 || dia < 60) {
+        return { label: '低血壓', class: 'badge-low' };
+      } else if (sys >= 140 || dia >= 90) {
+        return { label: '第二期高血壓', class: 'badge-stage2' };
+      } else if ((sys >= 130 && sys <= 139) || (dia >= 80 && dia <= 89)) {
+        return { label: '第一期高血壓', class: 'badge-stage1' };
+      } else if (sys >= 120 && sys <= 129 && dia < 80) {
+        return { label: '血壓偏高', class: 'badge-elevated' };
+      } else {
+        return { label: '正常血壓', class: 'badge-normal' };
+      }
+    }
+
+    function initUsers() {
+      const data = getData();
+      const select = document.getElementById('userSelect');
+      const currentUser = select.value;
+      select.innerHTML = '';
+
+      Object.keys(data).forEach(user => {
+        const opt = document.createElement('option');
+        opt.value = user;
+        opt.textContent = user;
+        select.appendChild(opt);
+      });
+
+      if (currentUser && data[currentUser]) {
+        select.value = currentUser;
+      } else {
+        select.value = '展宗';
+      }
+      render();
+    }
+
+    function addUser() {
+      const name = document.getElementById('newUserName').value.trim();
+      if (!name) return;
+      const data = getData();
+      if (!data[name]) {
+        data[name] = [];
+        saveData(data);
+        initUsers();
+        document.getElementById('userSelect').value = name;
+        render();
+      } else {
+        alert('該成員已存在！');
+      }
+      document.getElementById('newUserName').value = '';
+    }
+
+    function switchUser() {
+      render();
+    }
+
+    function clearCurrentUserRecords() {
+      const user = document.getElementById('userSelect').value;
+      if (!confirm(`確定要清空【${user}】的所有測量紀錄嗎？此動作無法復原。`)) return;
+
+      const data = getData();
+      data[user] = [];
+      saveData(data);
+      render();
+      alert(`已成功清空 ${user} 的所有紀錄。`);
+    }
+
+    function saveRecord() {
+      const user = document.getElementById('userSelect').value;
+      const datetime = document.getElementById('recordDateTime').value;
+      const sys = Number(document.getElementById('sys').value);
+      const dia = Number(document.getElementById('dia').value);
+      const pulse = Number(document.getElementById('pulse').value) || null;
+
+      if (!datetime || !sys || !dia) {
+        alert('請完整填寫日期時間、收縮壓與舒張壓！');
+        return;
+      }
+
+      const data = getData();
+      if (!data[user]) data[user] = [];
+
+      const isDuplicate = data[user].some(r => r.datetime === datetime && r.sys === sys && r.dia === dia);
+      if (isDuplicate) {
+        if (!confirm('偵測到完全相同時間與數值的紀錄，確定要重複新增嗎？')) return;
+      }
+
+      data[user].push({ datetime, sys, dia, pulse });
+      data[user].sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+      saveData(data);
+
+      document.getElementById('sys').value = '';
+      document.getElementById('dia').value = '';
+      document.getElementById('pulse').value = '';
+      setNowDateTime();
+
+      render();
+    }
+
+    function deleteRecord(index) {
+      if (!confirm('確定刪除此筆記錄？')) return;
+      const user = document.getElementById('userSelect').value;
+      const data = getData();
+      data[user].splice(index, 1);
+      saveData(data);
+      render();
+    }
+
+    function formatDisplayDateTime(isoStr) {
+      return isoStr ? isoStr.replace('T', ' ') : '';
+    }
+
+    function render() {
+      const user = document.getElementById('userSelect').value;
+      const data = getData();
+      const records = Array.isArray(data[user]) ? [...data[user]] : [];
+
+      document.getElementById('chartTitle').innerText = `${user} 的血壓趨勢`;
+
+      const tbody = document.getElementById('tableBody');
+      tbody.innerHTML = '';
+
+      if (records.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="color: #9ca3af; padding: 20px;">尚無記錄，請於上方新增</td></tr>';
+      } else {
+        [...records].reverse().forEach((r, revIdx) => {
+          const origIdx = records.length - 1 - revIdx;
+          const status = evaluateBP(r.sys, r.dia);
+          tbody.innerHTML += `
+            <tr>
+              <td>${formatDisplayDateTime(r.datetime)}</td>
+              <td><strong>${r.sys}</strong></td>
+              <td><strong>${r.dia}</strong></td>
+              <td>${r.pulse ?? '-'}</td>
+              <td><span class="badge ${status.class}">${status.label}</span></td>
+              <td><button class="btn-danger del-btn" onclick="deleteRecord(${origIdx})">刪除</button></td>
+            </tr>`;
+        });
+      }
+
+      const labels = records.map(r => formatDisplayDateTime(r.datetime));
+      const sysData = records.map(r => r.sys);
+      const diaData = records.map(r => r.dia);
+      const pulseData = records.map(r => r.pulse);
+
+      const line130 = records.map(() => 130);
+      const line80 = records.map(() => 80);
+
+      if (chartInstance) chartInstance.destroy();
+
+      const ctx = document.getElementById('bpChart').getContext('2d');
+      chartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: '收縮壓 (高壓)',
+              data: sysData,
+              borderColor: '#ef4444',
+              backgroundColor: '#ef4444',
+              tension: 0.15,
+              borderWidth: 2
+            },
+            {
+              label: '舒張壓 (低壓)',
+              data: diaData,
+              borderColor: '#3b82f6',
+              backgroundColor: '#3b82f6',
+              tension: 0.15,
+              borderWidth: 2
+            },
+            {
+              label: '心跳 (bpm)',
+              data: pulseData,
+              borderColor: '#10b981',
+              backgroundColor: '#10b981',
+              borderDash: [4, 4],
+              tension: 0.15,
+              borderWidth: 1.5
+            },
+            {
+              label: '高血壓門檻 (130/80)',
+              data: line130,
+              borderColor: 'rgba(239, 68, 68, 0.4)',
+              borderDash: [6, 6],
+              pointRadius: 0,
+              fill: false
+            },
+            {
+              label: '',
+              data: line80,
+              borderColor: 'rgba(59, 130, 246, 0.4)',
+              borderDash: [6, 6],
+              pointRadius: 0,
+              fill: false
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              labels: {
+                filter: item => item.text !== ''
+              }
+            }
+          },
+          scales: {
+            y: {
+              min: 40,
+              max: 200,
+              title: { display: true, text: '數值 (mmHg / bpm)' }
+            }
+          }
+        }
+      });
+    }
+
+    function triggerDownload(content, filename) {
+      const encodedUri = 'data:text/csv;charset=utf-8,\uFEFF' + encodeURIComponent(content);
+      const link = document.createElement('a');
+      link.setAttribute('href', encodedUri);
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => document.body.removeChild(link), 300);
+    }
+
+    function exportCSV(allUsers = false) {
+      try {
+        const data = getData();
+        const usersToExport = allUsers ? Object.keys(data) : [document.getElementById('userSelect').value];
+
+        let csvContent = "姓名,測量時間,收縮壓(高壓),舒張壓(低壓),心跳(脈搏),血壓狀態\r\n";
+        let rowCount = 0;
+
+        usersToExport.forEach(u => {
+          (data[u] || []).forEach(r => {
+            const status = (r.sys && r.dia) ? evaluateBP(r.sys, r.dia).label : '正常';
+            csvContent += `"${u}","${formatDisplayDateTime(r.datetime)}",${r.sys},${r.dia},${r.pulse ?? ''},"${status}"\r\n`;
+            rowCount++;
+          });
+        });
+
+        if (rowCount === 0) {
+          if (!confirm('目前尚無記錄，仍要匯出空白欄位範本嗎？')) return;
+        }
+
+        const filename = allUsers ? '全體血壓記錄備份.csv' : `${usersToExport[0]}_血壓記錄.csv`;
+        triggerDownload(csvContent, filename);
+      } catch (err) {
+        alert('匯出失敗：' + err.message);
+      }
+    }
+
+    function importCSV(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const text = e.target.result;
+          const lines = text.split(/\r\n|\n/).map(l => l.trim()).filter(l => l);
+          if (lines.length <= 1) return alert('檔案內容為空或格式不符！');
+
+          const data = getData();
+          let count = 0;
+
+          for (let i = 1; i < lines.length; i++) {
+            const cols = lines[i].split(',').map(c => c.replace(/^"|"$/g, '').trim());
+            if (cols.length >= 4) {
+              const [name, datetimeStr, sysStr, diaStr, pulseStr] = cols;
+              const sys = Number(sysStr);
+              const dia = Number(diaStr);
+              const pulse = pulseStr ? Number(pulseStr) : null;
+              const datetime = datetimeStr.replace(' ', 'T');
+
+              if (name && datetime && !isNaN(sys) && !isNaN(dia)) {
+                if (!data[name]) data[name] = [];
+                const exists = data[name].some(r => r.datetime === datetime && r.sys === sys && r.dia === dia);
+                if (!exists) {
+                  data[name].push({ datetime, sys, dia, pulse });
+                  count++;
+                }
+              }
+            }
+          }
+
+          Object.keys(data).forEach(u => {
+            data[u].sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+          });
+
+          saveData(data);
+          initUsers();
+          alert(`匯入完成！成功載入 ${count} 筆記錄。`);
+        } catch (err) {
+          alert('解析檔案失敗，請確認檔案格式為標準 CSV。');
+        }
+        event.target.value = '';
+      };
+      reader.readAsText(file);
+    }
+
+    function downloadChartImage() {
+      if (!chartInstance) return;
+      const user = document.getElementById('userSelect').value;
+      const imageURL = chartInstance.toBase64Image();
+      const link = document.createElement('a');
+      link.href = imageURL;
+      link.download = `${user}_血壓趨勢圖.png`;
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => document.body.removeChild(link), 300);
+    }
+
+    setNowDateTime();
+    initUsers();
+  </script>
+</body>
+</html>
