@@ -411,27 +411,28 @@
       setNowDateTime();
       render();
 
-      if (GOOGLE_SCRIPT_URL && !GOOGLE_SCRIPT_URL.includes("在此貼上")) {
-        updateSyncStatus("備份雲端中...", "status-syncing");
-        try {
-          await fetch(GOOGLE_SCRIPT_URL, {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              token: `${deviceToken}_${activeUser}`,
-              name: activeUser,
-              datetime,
-              sys,
-              dia,
-              pulse
-            })
-          });
-          updateSyncStatus("已備份至雲端", "status-online");
-        } catch (e) {
-          updateSyncStatus("雲端未完成(已保留本機)", "status-error");
-        }
-      }
+// index.html 中的非同步上傳區塊
+if (GOOGLE_SCRIPT_URL && !GOOGLE_SCRIPT_URL.includes("在此貼上")) {
+  updateSyncStatus("備份雲端中...", "status-syncing");
+  try {
+    await fetch(GOOGLE_SCRIPT_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // 改為 text/plain 避免 CORS 阻擋
+      body: JSON.stringify({
+        token: `${deviceToken}_${activeUser}`,
+        name: activeUser,
+        datetime: datetime,
+        sys: sys,
+        dia: dia,
+        pulse: pulse
+      })
+    });
+    updateSyncStatus("已備份至雲端", "status-online");
+  } catch (e) {
+    updateSyncStatus("雲端未完成(已保留本機)", "status-error");
+  }
+}
     }
 
     function deleteRecord(index) {
