@@ -361,74 +361,101 @@
       return normalizeTimeKey(isoStr);
     }
 
-    // 採用 JSONP 機制穿透 Google Apps Script 轉址，避開 CORS 問題
-    function fetchCloudData() {
-      if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes("https://script.google.com/macros/s/AKfycbwpBddfV6NELN56jvuhQ-rNTIh6BThg56oX8tqYl_cy8oHC0UTF-gZcRlIH5x9vsqE/exec")) {
-        updateSyncStatus("未設定雲端網址", "status-error");
-        return;
+// 替換 index.html 中的 fetchCloudData 函式
+async function fetchCloudData() {
+  if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes("https://script.google.com/macros/s/AKfycbwpBddfV6NELN56jvuhQ-rNTIh6BThg56oX8tqYl_cy8oHC0UTF-gZcRlIH5x9vsqE/exec")) {
+    updateSyncStatus("未設定雲端網址", "status-error");
+    return;
+  }
+
+  const activeUser = document.getElementById('userSelect').value;
+  const queryToken = `${deviceToken}_${activeUser}`;
+
+  updateSyncStatus("雲端同步中...", "status-syncing");
+
+  // 資料合併與去重處理
+  function processCloudData(cloudData) {
+    if (!Array.isArray(cloudData)) return;
+
+    const localData = getActiveRecords();
+    const combined = [...localData];
+
+    cloudData.forEach(c => {
+      const cloudKey = `${normalizeTimeKey(c.datetime)}_${c.sys}_${c.dia}`;
+      const exists = combined.some(l => {
+        const localKey = `${normalizeTimeKey(l.datetime)}_${l.sys}_${l.dia}`;
+        return localKey === cloudKey;
+      });
+      if (!exists) combined.push(c);
+    });
+
+    const finalRecords = [];
+    const seen = new Set();
+    combined.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+
+    combined.forEach(r => {
+      const uKey = `${normalizeTimeKey(r.datetime)}_${r.sys}_${r.dia}`;
+      if (!seen.has(uKey)) {
+        seen.add(uKey);
+        finalRecords.push(r);
       }
+    });
 
-      const activeUser = document.getElementById('userSelect').value;
-      const queryToken = `${deviceToken}_${activeUser}`;
+    saveActiveRecords(finalRecords);
+    render();
+    updateSyncStatus("已與雲端同步", "status-online");
+  }
 
-      updateSyncStatus("雲端同步中...", "status-syncing");
+  // 1. 優先嘗試標準 fetch（iOS Safari 最相容此方式）
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
 
-      const callbackName = 'handleCloudData_' + Math.floor(Math.random() * 1000000);
+    const resp = await fetch(`${GOOGLE_SCRIPT_URL}?token=${encodeURIComponent(queryToken)}`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      signal: controller.signal
+    });
 
-      const timeoutId = setTimeout(() => {
-        cleanup();
-        updateSyncStatus("離線模式 (本機可用)", "status-error");
-      }, 6000);
+    clearTimeout(timeoutId);
 
-      function cleanup() {
-        clearTimeout(timeoutId);
-        if (window[callbackName]) delete window[callbackName];
-        const scriptEl = document.getElementById(callbackName);
-        if (scriptEl) scriptEl.remove();
-      }
-
-      window[callbackName] = function(cloudData) {
-        cleanup();
-        if (Array.isArray(cloudData)) {
-          const localData = getActiveRecords();
-          const combined = [...localData];
-
-          cloudData.forEach(c => {
-            const cloudKey = `${normalizeTimeKey(c.datetime)}_${c.sys}_${c.dia}`;
-            const exists = combined.some(l => {
-              const localKey = `${normalizeTimeKey(l.datetime)}_${l.sys}_${l.dia}`;
-              return localKey === cloudKey;
-            });
-            if (!exists) combined.push(c);
-          });
-
-          const finalRecords = [];
-          const seen = new Set();
-          combined.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
-
-          combined.forEach(r => {
-            const uKey = `${normalizeTimeKey(r.datetime)}_${r.sys}_${r.dia}`;
-            if (!seen.has(uKey)) {
-              seen.add(uKey);
-              finalRecords.push(r);
-            }
-          });
-
-          saveActiveRecords(finalRecords);
-          render();
-          updateSyncStatus("已與雲端同步", "status-online");
-        }
-      };
-
-      const script = document.createElement('script');
-      script.id = callbackName;
-      script.src = `${GOOGLE_SCRIPT_URL}?token=${encodeURIComponent(queryToken)}&callback=${callbackName}`;
-      script.onerror = () => {
-        cleanup();
-        updateSyncStatus("離線模式 (本機可用)", "status-error");
-      };
-      document.body.appendChild(script);
+    if (resp.ok) {
+      const data = await resp.json();
+      processCloudData(data);
+      return; // 成功即返回
     }
+  } catch (err) {
+    console.warn("標準 fetch 失敗，嘗試切換 JSONP 模式...", err);
+  }
+
+  // 2. 若 fetch 被擋，自動切換至 JSONP 備援
+  const callbackName = 'cb_' + Math.floor(Math.random() * 1000000);
+  const timeoutId = setTimeout(() => {
+    cleanup();
+    updateSyncStatus("離線模式 (本機可用)", "status-error");
+  }, 5000);
+
+  function cleanup() {
+    clearTimeout(timeoutId);
+    if (window[callbackName]) delete window[callbackName];
+    const scriptEl = document.getElementById(callbackName);
+    if (scriptEl) scriptEl.remove();
+  }
+
+  window[callbackName] = function(cloudData) {
+    cleanup();
+    processCloudData(cloudData);
+  };
+
+  const script = document.createElement('script');
+  script.id = callbackName;
+  script.src = `${GOOGLE_SCRIPT_URL}?token=${encodeURIComponent(queryToken)}&callback=${callbackName}`;
+  script.onerror = () => {
+    cleanup();
+    updateSyncStatus("離線模式 (本機可用)", "status-error");
+  };
+  document.body.appendChild(script);
+}
 
     async function saveRecord() {
       const activeUser = document.getElementById('userSelect').value;
