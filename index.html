@@ -205,7 +205,7 @@
 
   <script>
     // 請填入你的 Google Apps Script 部署網址
-    const GOOGLE_SCRIPT_URL = "AKfycbwpBddfV6NELN56jvuhQ-rNTIh6BThg56oX8tqYl_cy8oHC0UTF-gZcRlIH5x9vsqE";
+    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwpBddfV6NELN56jvuhQ-rNTIh6BThg56oX8tqYl_cy8oHC0UTF-gZcRlIH5x9vsqE/exec";
 
     let chartInstance = null;
     let deviceToken = '';
@@ -355,57 +355,78 @@
     }
 
     // 雲端同步核心修正：使用標準化特徵鍵進行去重比對
-    async function fetchCloudData() {
-      if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes("在此貼上")) {
-        updateSyncStatus("離線模式", "");
-        return;
-      }
+  // 替換 index.html 中的 fetchCloudData
+function fetchCloudData() {
+  if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes("在此貼上")) {
+    updateSyncStatus("未設定網址", "status-error");
+    return;
+  }
 
-      const activeUser = document.getElementById('userSelect').value;
-      const queryToken = `${deviceToken}_${activeUser}`;
+  const activeUser = document.getElementById('userSelect').value;
+  const queryToken = `${deviceToken}_${activeUser}`;
 
-      updateSyncStatus("雲端同步中...", "status-syncing");
-      try {
-        const resp = await fetch(`${GOOGLE_SCRIPT_URL}?token=${encodeURIComponent(queryToken)}`);
-        const cloudData = await resp.json();
+  updateSyncStatus("雲端同步中...", "status-syncing");
 
-        if (Array.isArray(cloudData)) {
-          const localData = getActiveRecords();
-          const combined = [...localData];
+  // 定義回呼函式名稱
+  const callbackName = 'handleCloudData_' + Math.floor(Math.random() * 1000000);
 
-          cloudData.forEach(c => {
-            const cloudKey = `${normalizeTimeKey(c.datetime)}_${c.sys}_${c.dia}`;
-            const exists = combined.some(l => {
-              const localKey = `${normalizeTimeKey(l.datetime)}_${l.sys}_${l.dia}`;
-              return localKey === cloudKey;
-            });
+  // 設定超時防呆（5 秒若無回應標示離線）
+  const timeoutId = setTimeout(() => {
+    cleanup();
+    updateSyncStatus("離線模式 (本機可用)", "status-error");
+  }, 5000);
 
-            if (!exists) {
-              combined.push(c);
-            }
-          });
+  function cleanup() {
+    clearTimeout(timeoutId);
+    if (window[callbackName]) delete window[callbackName];
+    const scriptEl = document.getElementById(callbackName);
+    if (scriptEl) scriptEl.remove();
+  }
 
-          // 重新排序並以時間戳記再次去重一次
-          const finalRecords = [];
-          const seen = new Set();
-          combined.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+  // 接收 Google Apps Script 回傳的資料
+  window[callbackName] = function(cloudData) {
+    cleanup();
+    if (Array.isArray(cloudData)) {
+      const localData = getActiveRecords();
+      const combined = [...localData];
 
-          combined.forEach(r => {
-            const uKey = `${normalizeTimeKey(r.datetime)}_${r.sys}_${r.dia}`;
-            if (!seen.has(uKey)) {
-              seen.add(uKey);
-              finalRecords.push(r);
-            }
-          });
+      cloudData.forEach(c => {
+        const cloudKey = `${normalizeTimeKey(c.datetime)}_${c.sys}_${c.dia}`;
+        const exists = combined.some(l => {
+          const localKey = `${normalizeTimeKey(l.datetime)}_${l.sys}_${l.dia}`;
+          return localKey === cloudKey;
+        });
+        if (!exists) combined.push(c);
+      });
 
-          saveActiveRecords(finalRecords);
-          render();
-          updateSyncStatus("已與雲端同步", "status-online");
+      const finalRecords = [];
+      const seen = new Set();
+      combined.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+
+      combined.forEach(r => {
+        const uKey = `${normalizeTimeKey(r.datetime)}_${r.sys}_${r.dia}`;
+        if (!seen.has(uKey)) {
+          seen.add(uKey);
+          finalRecords.push(r);
         }
-      } catch (err) {
-        updateSyncStatus("離線模式 (本機可用)", "status-error");
-      }
+      });
+
+      saveActiveRecords(finalRecords);
+      render();
+      updateSyncStatus("已與雲端同步", "status-online");
     }
+  };
+
+  // 動態建立 script 標籤載入資料（完全規避 CORS）
+  const script = document.createElement('script');
+  script.id = callbackName;
+  script.src = `${GOOGLE_SCRIPT_URL}?token=${encodeURIComponent(queryToken)}&callback=${callbackName}`;
+  script.onerror = () => {
+    cleanup();
+    updateSyncStatus("離線模式 (本機可用)", "status-error");
+  };
+  document.body.appendChild(script);
+}
 
     async function saveRecord() {
       const activeUser = document.getElementById('userSelect').value;
