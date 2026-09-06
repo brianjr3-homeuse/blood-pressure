@@ -138,7 +138,6 @@
     <span id="syncStatus" class="status-badge">載入中...</span>
   </div>
 
-  <!-- 成員切換與新增功能區 -->
   <div class="card">
     <div class="form-group form-group-desktop-split" style="justify-content: space-between;">
       <div class="form-group" style="flex-direction: row; flex-wrap: wrap;">
@@ -146,7 +145,7 @@
           <select id="userSelect" onchange="switchUser()"></select>
         </label>
         <div style="display: flex; gap: 6px;">
-          <input type="text" id="newUserName" placeholder="新增長輩/小孩" style="width: 120px;">
+          <input type="text" id="newUserName" placeholder="新增成員" style="width: 110px;">
           <button onclick="addUser()" style="width: 70px;">+ 新增</button>
         </div>
         <button class="btn-danger" style="padding: 6px 10px; font-size: 12px;" onclick="deleteCurrentUser()">刪除此成員</button>
@@ -158,7 +157,6 @@
     </div>
   </div>
 
-  <!-- 輸入資料區 -->
   <div class="card">
     <div class="form-group">
       <label>測量時間：<input type="datetime-local" id="recordDateTime"></label>
@@ -176,7 +174,6 @@
     </div>
   </div>
 
-  <!-- 趨勢圖表區 -->
   <div class="card">
     <div class="chart-header">
       <h3 style="margin:0;" id="chartTitle">血壓趨勢</h3>
@@ -187,7 +184,6 @@
     </div>
   </div>
 
-  <!-- 歷史紀錄表格 -->
   <div class="card">
     <h3 style="margin-top:0;">測量歷史紀錄</h3>
     <div class="table-responsive">
@@ -208,15 +204,12 @@
   </div>
 
   <script>
-    // ==========================================
-    // 請確認此處貼上你的 Google Apps Script 網址：
-    // ==========================================
-    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwpBddfV6NELN56jvuhQ-rNTIh6BThg56oX8tqYl_cy8oHC0UTF-gZcRlIH5x9vsqE/exec";
+    // 請填入你的 Google Apps Script 部署網址
+    const GOOGLE_SCRIPT_URL = "AKfycbwpBddfV6NELN56jvuhQ-rNTIh6BThg56oX8tqYl_cy8oHC0UTF-gZcRlIH5x9vsqE";
 
     let chartInstance = null;
     let deviceToken = '';
 
-    // 初始化設備指紋與成員名冊
     function initDevice() {
       deviceToken = localStorage.getItem('app_device_token');
       if (!deviceToken) {
@@ -225,16 +218,13 @@
       }
 
       let users = JSON.parse(localStorage.getItem(`users_${deviceToken}`));
-
-      // 首次登入詢問姓名，且設定為唯一的成員
       if (!users || !Array.isArray(users) || users.length === 0) {
         let initialName = prompt('歡迎使用！請輸入這台手機的預設使用者姓名：', '');
         while (!initialName || !initialName.trim()) {
-          initialName = prompt('姓名不得為空，請輸入姓名', '');
+          initialName = prompt('姓名不得為空，請輸入姓名：', '');
         }
         users = [initialName.trim()];
         localStorage.setItem(`users_${deviceToken}`, JSON.stringify(users));
-        // 初始化該使用者的資料庫
         if (!localStorage.getItem(`bp_records_${deviceToken}_${users[0]}`)) {
           localStorage.setItem(`bp_records_${deviceToken}_${users[0]}`, JSON.stringify([]));
         }
@@ -348,10 +338,23 @@
       return { label: '正常血壓', class: 'badge-normal' };
     }
 
-    function formatDisplayDateTime(isoStr) {
-      return isoStr ? String(isoStr).replace('T', ' ') : '';
+    // 將任何時間字串轉為分鐘精確度（YYYY-MM-DD HH:mm），徹底解決比對落差
+    function normalizeTimeKey(dateStr) {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return String(dateStr);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const date = String(d.getDate()).padStart(2, '0');
+      const hours = String(d.getHours()).padStart(2, '0');
+      const mins = String(d.getMinutes()).padStart(2, '0');
+      return `${year}-${month}-${date} ${hours}:${mins}`;
     }
 
+    function formatDisplayDateTime(isoStr) {
+      return normalizeTimeKey(isoStr);
+    }
+
+    // 雲端同步核心修正：使用標準化特徵鍵進行去重比對
     async function fetchCloudData() {
       if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes("在此貼上")) {
         updateSyncStatus("離線模式", "");
@@ -359,7 +362,6 @@
       }
 
       const activeUser = document.getElementById('userSelect').value;
-      // 雲端查詢複合鍵：deviceToken + activeUser
       const queryToken = `${deviceToken}_${activeUser}`;
 
       updateSyncStatus("雲端同步中...", "status-syncing");
@@ -370,19 +372,38 @@
         if (Array.isArray(cloudData)) {
           const localData = getActiveRecords();
           const combined = [...localData];
-          
+
           cloudData.forEach(c => {
-            const exists = combined.some(l => l.datetime === c.datetime && l.sys === c.sys && l.dia === c.dia);
-            if (!exists) combined.push(c);
+            const cloudKey = `${normalizeTimeKey(c.datetime)}_${c.sys}_${c.dia}`;
+            const exists = combined.some(l => {
+              const localKey = `${normalizeTimeKey(l.datetime)}_${l.sys}_${l.dia}`;
+              return localKey === cloudKey;
+            });
+
+            if (!exists) {
+              combined.push(c);
+            }
           });
 
+          // 重新排序並以時間戳記再次去重一次
+          const finalRecords = [];
+          const seen = new Set();
           combined.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
-          saveActiveRecords(combined);
+
+          combined.forEach(r => {
+            const uKey = `${normalizeTimeKey(r.datetime)}_${r.sys}_${r.dia}`;
+            if (!seen.has(uKey)) {
+              seen.add(uKey);
+              finalRecords.push(r);
+            }
+          });
+
+          saveActiveRecords(finalRecords);
           render();
           updateSyncStatus("已與雲端同步", "status-online");
         }
       } catch (err) {
-        updateSyncStatus("同步未連線(本機可用)", "status-error");
+        updateSyncStatus("離線模式 (本機可用)", "status-error");
       }
     }
 
@@ -410,28 +431,27 @@
       setNowDateTime();
       render();
 
-// index.html 中的非同步上傳區塊
-if (GOOGLE_SCRIPT_URL && !GOOGLE_SCRIPT_URL.includes("在此貼上")) {
-  updateSyncStatus("備份雲端中...", "status-syncing");
-  try {
-    await fetch(GOOGLE_SCRIPT_URL, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // 改為 text/plain 避免 CORS 阻擋
-      body: JSON.stringify({
-        token: `${deviceToken}_${activeUser}`,
-        name: activeUser,
-        datetime: datetime,
-        sys: sys,
-        dia: dia,
-        pulse: pulse
-      })
-    });
-    updateSyncStatus("已備份至雲端", "status-online");
-  } catch (e) {
-    updateSyncStatus("雲端未完成(已保留本機)", "status-error");
-  }
-}
+      if (GOOGLE_SCRIPT_URL && !GOOGLE_SCRIPT_URL.includes("在此貼上")) {
+        updateSyncStatus("備份雲端中...", "status-syncing");
+        try {
+          await fetch(GOOGLE_SCRIPT_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+              token: `${deviceToken}_${activeUser}`,
+              name: activeUser,
+              datetime,
+              sys,
+              dia,
+              pulse
+            })
+          });
+          updateSyncStatus("已備份至雲端", "status-online");
+        } catch (e) {
+          updateSyncStatus("雲端未完成(已保留本機)", "status-error");
+        }
+      }
     }
 
     function deleteRecord(index) {
@@ -444,8 +464,6 @@ if (GOOGLE_SCRIPT_URL && !GOOGLE_SCRIPT_URL.includes("在此貼上")) {
 
     function render() {
       const records = getActiveRecords();
-      const activeUser = document.getElementById('userSelect').value;
-
       const tbody = document.getElementById('tableBody');
       tbody.innerHTML = '';
 
