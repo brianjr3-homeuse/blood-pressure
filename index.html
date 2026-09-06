@@ -3,7 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <!-- 網頁與書籤標題 -->
   <title>血壓健康管理追蹤器</title>
+
+  <!-- 社群軟體（LINE、iMessage、Facebook）分享預覽設定 -->
+  <meta property="og:title" content="血壓健康管理追蹤器">
+  <meta property="og:description" content="個人血壓與脈搏日常追蹤記錄工具">
+  <meta property="og:type" content="website">
+
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root {
@@ -209,14 +217,14 @@
 
   <script>
     // =======================================================
-    // 請將你的 Google Apps Script 部署網址貼在下方引號中：
+    // 請將你的 Google Apps Script 部署網址貼在此處：
     // =======================================================
-    const GOOGLE_SCRIPT_URL = "在此貼上你的_GOOGLE_APPS_SCRIPT_網址";
+    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwpBddfV6NELN56jvuhQ-rNTIh6BThg56oX8tqYl_cy8oHC0UTF-gZcRlIH5x9vsqE/exec";
 
     let chartInstance = null;
     let deviceToken = '';
 
-    // 初始化裝置指紋與使用者清單
+    // 初始化設備識別碼與成員名單
     function initDevice() {
       deviceToken = localStorage.getItem('app_device_token');
       if (!deviceToken) {
@@ -228,7 +236,7 @@
       if (!users || !Array.isArray(users) || users.length === 0) {
         let initialName = prompt('歡迎使用！請輸入這台手機的預設使用者姓名：', '');
         while (!initialName || !initialName.trim()) {
-          initialName = prompt('姓名不得為空，請輸入姓名：', '');
+          initialName = prompt('請輸入這台裝置的主要使用者名稱（例如：自己、本人）：', '');
         }
         users = [initialName.trim()];
         localStorage.setItem(`users_${deviceToken}`, JSON.stringify(users));
@@ -361,101 +369,72 @@
       return normalizeTimeKey(isoStr);
     }
 
-// 替換 index.html 中的 fetchCloudData 函式
-async function fetchCloudData() {
-  if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes("https://script.google.com/macros/s/AKfycbwpBddfV6NELN56jvuhQ-rNTIh6BThg56oX8tqYl_cy8oHC0UTF-gZcRlIH5x9vsqE/exec")) {
-    updateSyncStatus("未設定雲端網址", "status-error");
-    return;
-  }
-
-  const activeUser = document.getElementById('userSelect').value;
-  const queryToken = `${deviceToken}_${activeUser}`;
-
-  updateSyncStatus("雲端同步中...", "status-syncing");
-
-  // 資料合併與去重處理
-  function processCloudData(cloudData) {
-    if (!Array.isArray(cloudData)) return;
-
-    const localData = getActiveRecords();
-    const combined = [...localData];
-
-    cloudData.forEach(c => {
-      const cloudKey = `${normalizeTimeKey(c.datetime)}_${c.sys}_${c.dia}`;
-      const exists = combined.some(l => {
-        const localKey = `${normalizeTimeKey(l.datetime)}_${l.sys}_${l.dia}`;
-        return localKey === cloudKey;
-      });
-      if (!exists) combined.push(c);
-    });
-
-    const finalRecords = [];
-    const seen = new Set();
-    combined.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
-
-    combined.forEach(r => {
-      const uKey = `${normalizeTimeKey(r.datetime)}_${r.sys}_${r.dia}`;
-      if (!seen.has(uKey)) {
-        seen.add(uKey);
-        finalRecords.push(r);
+    // 全面採用 POST 讀取，跨 Android 與 iOS 均無阻礙
+    async function fetchCloudData() {
+      if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes("在此貼上")) {
+        updateSyncStatus("未設定雲端網址", "status-error");
+        return;
       }
-    });
 
-    saveActiveRecords(finalRecords);
-    render();
-    updateSyncStatus("已與雲端同步", "status-online");
-  }
+      const activeUser = document.getElementById('userSelect').value;
+      const queryToken = `${deviceToken}_${activeUser}`;
 
-  // 1. 優先嘗試標準 fetch（iOS Safari 最相容此方式）
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 6000);
+      updateSyncStatus("雲端同步中...", "status-syncing");
 
-    const resp = await fetch(`${GOOGLE_SCRIPT_URL}?token=${encodeURIComponent(queryToken)}`, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' },
-      signal: controller.signal
-    });
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 7000);
 
-    clearTimeout(timeoutId);
+        const resp = await fetch(GOOGLE_SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: 'query',
+            token: queryToken
+          }),
+          signal: controller.signal
+        });
 
-    if (resp.ok) {
-      const data = await resp.json();
-      processCloudData(data);
-      return; // 成功即返回
+        clearTimeout(timeoutId);
+        const result = await resp.json();
+
+        if (result && result.status === "success" && Array.isArray(result.data)) {
+          const cloudData = result.data;
+          const localData = getActiveRecords();
+          const combined = [...localData];
+
+          cloudData.forEach(c => {
+            const cloudKey = `${normalizeTimeKey(c.datetime)}_${c.sys}_${c.dia}`;
+            const exists = combined.some(l => {
+              const localKey = `${normalizeTimeKey(l.datetime)}_${l.sys}_${l.dia}`;
+              return localKey === cloudKey;
+            });
+            if (!exists) combined.push(c);
+          });
+
+          const finalRecords = [];
+          const seen = new Set();
+          combined.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+
+          combined.forEach(r => {
+            const uKey = `${normalizeTimeKey(r.datetime)}_${r.sys}_${r.dia}`;
+            if (!seen.has(uKey)) {
+              seen.add(uKey);
+              finalRecords.push(r);
+            }
+          });
+
+          saveActiveRecords(finalRecords);
+          render();
+          updateSyncStatus("已與雲端同步", "status-online");
+        } else {
+          updateSyncStatus("已是最新 (本機)", "status-online");
+        }
+      } catch (err) {
+        console.warn("同步連線受限:", err);
+        updateSyncStatus("離線模式 (本機可用)", "status-error");
+      }
     }
-  } catch (err) {
-    console.warn("標準 fetch 失敗，嘗試切換 JSONP 模式...", err);
-  }
-
-  // 2. 若 fetch 被擋，自動切換至 JSONP 備援
-  const callbackName = 'cb_' + Math.floor(Math.random() * 1000000);
-  const timeoutId = setTimeout(() => {
-    cleanup();
-    updateSyncStatus("離線模式 (本機可用)", "status-error");
-  }, 5000);
-
-  function cleanup() {
-    clearTimeout(timeoutId);
-    if (window[callbackName]) delete window[callbackName];
-    const scriptEl = document.getElementById(callbackName);
-    if (scriptEl) scriptEl.remove();
-  }
-
-  window[callbackName] = function(cloudData) {
-    cleanup();
-    processCloudData(cloudData);
-  };
-
-  const script = document.createElement('script');
-  script.id = callbackName;
-  script.src = `${GOOGLE_SCRIPT_URL}?token=${encodeURIComponent(queryToken)}&callback=${callbackName}`;
-  script.onerror = () => {
-    cleanup();
-    updateSyncStatus("離線模式 (本機可用)", "status-error");
-  };
-  document.body.appendChild(script);
-}
 
     async function saveRecord() {
       const activeUser = document.getElementById('userSelect').value;
@@ -486,9 +465,9 @@ async function fetchCloudData() {
         try {
           await fetch(GOOGLE_SCRIPT_URL, {
             method: 'POST',
-            mode: 'no-cors',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
             body: JSON.stringify({
+              action: 'save',
               token: `${deviceToken}_${activeUser}`,
               name: activeUser,
               datetime: datetime,
